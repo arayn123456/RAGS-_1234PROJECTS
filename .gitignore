@@ -10,7 +10,7 @@ env/
 ENV/
 *.env
 frontend/node_modules/
-
+docker.txt
 # IDE
 .idea/
 .vscode/
