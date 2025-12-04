@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  # Main Application (Backend + Frontend)
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: document-qa
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      # Persist data directories
+      - ./data:/app/data
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Optional: Development mode with hot reload
+  app-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: document-qa-dev
+    ports:
+      - "8000:8000"
+      - "3000:3000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - ./backend:/app/backend
+      - ./frontend:/app/frontend
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - /app/frontend/node_modules
+    profiles:
+      - dev
+
+volumes:
+  data:
+  logs:
+
