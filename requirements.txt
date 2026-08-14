@@ -1,7 +1,9 @@
 # Core Dependencies
-openai>=1.0.0
+# openai>=1.0.0  # Commented out — using Gemini
+google-generativeai>=0.8.0
+google-genai>=1.0.0
 langchain>=0.1.0
-langchain-openai>=0.0.5
+# langchain-openai>=0.0.5  # Commented out — using Gemini
 langchain-community>=0.0.10
 
 # Vector Store

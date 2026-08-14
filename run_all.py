@@ -4,7 +4,6 @@ Single script to start the entire application.
 """
 import subprocess
 import sys
-import os
 import time
 import webbrowser
 from pathlib import Path
@@ -23,8 +22,8 @@ def check_requirements():
         print("ERROR: .env file not found!")
         print("=" * 60)
         print(f"\nPlease create: {ENV_FILE}")
-        print("Add your OpenAI API key:")
-        print("    OPENAI_API_KEY=sk-your-key-here")
+        print("Add your Gemini API key:")
+        print("    GEMINI_API_KEY=your-gemini-api-key-here")
         print("=" * 60)
         return False
     
@@ -41,15 +40,36 @@ def check_requirements():
     return True
 
 
+def _popen_kwargs():
+    """Keep child servers alive when the console gets Ctrl+C/reload noise."""
+    kwargs = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    return kwargs
+
+
 def run_backend():
-    """Start the FastAPI backend server."""
+    """Start the FastAPI backend server.
+
+    stdout/stderr are inherited (not piped). Piping + uvicorn --reload
+    often causes the backend to exit immediately on Windows.
+    """
     return subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"],
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "backend.main:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8000",
+            "--reload",
+            "--reload-dir",
+            "backend",
+        ],
         cwd=PROJECT_ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1
+        **_popen_kwargs(),
     )
 
 
@@ -59,21 +79,8 @@ def run_frontend():
         ["npm", "run", "dev"],
         cwd=FRONTEND_DIR,
         shell=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1
+        **_popen_kwargs(),
     )
-
-
-def print_output(process, prefix):
-    """Print process output with prefix."""
-    if process.stdout:
-        line = process.stdout.readline()
-        if line:
-            print(f"[{prefix}] {line.strip()}")
-            return True
-    return False
 
 
 def main():
@@ -91,10 +98,27 @@ def main():
     backend = run_backend()
     
     # Wait for backend to start
-    time.sleep(2)
+    time.sleep(3)
+    
+    if backend.poll() is not None:
+        print("=" * 60)
+        print(f"ERROR: Backend exited immediately (code {backend.returncode})")
+        print("Try running manually to see the error:")
+        print("  python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000")
+        print("=" * 60)
+        sys.exit(1)
     
     print("Starting Frontend (port 3000)...")
     frontend = run_frontend()
+    
+    time.sleep(2)
+    if frontend.poll() is not None:
+        print("=" * 60)
+        print(f"ERROR: Frontend exited immediately (code {frontend.returncode})")
+        print("Try: cd frontend && npm run dev")
+        print("=" * 60)
+        backend.terminate()
+        sys.exit(1)
     
     print()
     print("=" * 60)
@@ -110,7 +134,7 @@ def main():
     print()
     
     # Open browser after a short delay
-    time.sleep(3)
+    time.sleep(2)
     webbrowser.open("http://localhost:3000")
     
     # Monitor both processes
@@ -118,17 +142,13 @@ def main():
         while True:
             # Check if processes are still running
             if backend.poll() is not None:
-                print("\n[ERROR] Backend server stopped!")
+                print(f"\n[ERROR] Backend server stopped! (exit code {backend.returncode})")
                 break
             if frontend.poll() is not None:
-                print("\n[ERROR] Frontend server stopped!")
+                print(f"\n[ERROR] Frontend server stopped! (exit code {frontend.returncode})")
                 break
             
-            # Print output from both
-            print_output(backend, "Backend")
-            print_output(frontend, "Frontend")
-            
-            time.sleep(0.1)
+            time.sleep(0.5)
             
     except KeyboardInterrupt:
         print("\n\nShutting down servers...")
@@ -149,4 +169,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

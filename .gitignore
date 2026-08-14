@@ -1,48 +1,42 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+!env_template.txt
+
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.Python
-venv/
-env/
+*.egg-info/
+.eggs/
+dist/
+build/
 .venv/
-ENV/
-*.env
+venv/
+rags/
+myvenv/
+Lib/
+Scripts/
+Include/
+share/
+etc/
+pyvenv.cfg
+
+# Node
 frontend/node_modules/
-docker.txt
-# IDE
+frontend/dist/
+
+# Runtime data
+data/
+logs/
+*.log
+
+# IDE / OS
 .idea/
 .vscode/
-*.swp
-*.swo
-*~
-
-# Project data (user-generated)
-data/
-*.db
-
-# Logs (keep structure, ignore contents)
-logs/*.log
-
-# Environment
-.env
-.env.local
-.env.*.local
-
-# Logs
-*.log
-logs/
-
-# OS
 .DS_Store
 Thumbs.db
 
-# Jupyter
-.ipynb_checkpoints/
-
-# Distribution
-dist/
-build/
-*.egg-info/
-
+# Chroma / caches
+embedding_cache*.json

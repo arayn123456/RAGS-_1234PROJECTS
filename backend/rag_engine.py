@@ -1,6 +1,6 @@
 """
 RAG Engine Module
-Core retrieval-augmented generation logic with OpenAI integration.
+Core retrieval-augmented generation logic with free Gemini models.
 """
 import json
 from pathlib import Path
@@ -8,7 +8,10 @@ from typing import Dict, List, Optional, Generator, Any
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from openai import OpenAI
+# from openai import OpenAI  # Commented out — using Gemini
+# import google.generativeai as genai  # Deprecated — using google.genai
+from google import genai as google_genai
+from google.genai import types as genai_types
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from . import config
@@ -113,7 +116,7 @@ Use this information to provide accurate, well-sourced answers."""
 
 class RAGEngine:
     """
-    Core RAG engine that combines retrieval and generation.
+    Core RAG engine that combines retrieval and generation with free Gemini models.
     """
     
     def __init__(
@@ -122,11 +125,73 @@ class RAGEngine:
         vector_store: Optional[VectorStore] = None,
         chat_model: str = config.CHAT_MODEL
     ):
-        self.client = OpenAI(api_key=api_key or config.OPENAI_API_KEY)
+        # OpenAI / deprecated generativeai clients commented out
+        # self.client = OpenAI(api_key=api_key or config.OPENAI_API_KEY)
+        # genai.configure(api_key=...)
+        # self.model = genai.GenerativeModel(...)
+        self.client = google_genai.Client(api_key=api_key or config.GEMINI_API_KEY)
+        self.chat_model = chat_model or config.CHAT_MODEL
+        self._gen_config = genai_types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            temperature=0.3,
+            max_output_tokens=2000,
+        )
         self.vector_store = vector_store or VectorStore()
         self.hybrid_search = HybridSearch(self.vector_store)
         self.document_processor = DocumentProcessor()
-        self.chat_model = chat_model
+    
+    def _generate(self, contents, stream: bool = False):
+        """Call Gemini using the current configured free chat model."""
+        # Always read from config so .env / config changes apply without stale init defaults
+        model_name = config.CHAT_MODEL or self.chat_model
+        self.chat_model = model_name
+        log_info(f"Generating with Gemini model: {model_name}")
+        if stream:
+            return self.client.models.generate_content_stream(
+                model=model_name,
+                contents=contents,
+                config=self._gen_config,
+            )
+        return self.client.models.generate_content(
+            model=model_name,
+            contents=contents,
+            config=self._gen_config,
+        )
+    
+    def _build_gemini_contents(
+        self,
+        user_message: str,
+        chat_history: Optional[List[Dict[str, str]]] = None
+    ) -> List[genai_types.Content]:
+        """Build Gemini contents from chat history + current user message."""
+        contents: List[genai_types.Content] = []
+        if chat_history:
+            for msg in chat_history[-10:]:
+                role = msg.get("role", "user")
+                gemini_role = "user" if role == "user" else "model"
+                contents.append(
+                    genai_types.Content(
+                        role=gemini_role,
+                        parts=[genai_types.Part(text=msg.get("content", ""))],
+                    )
+                )
+        contents.append(
+            genai_types.Content(
+                role="user",
+                parts=[genai_types.Part(text=user_message)],
+            )
+        )
+        return contents
+    
+    def _usage_tokens(self, response) -> Dict[str, int]:
+        """Extract token usage from a Gemini response."""
+        usage = getattr(response, "usage_metadata", None)
+        if not usage:
+            return {"prompt": 0, "completion": 0, "total": 0}
+        prompt = getattr(usage, "prompt_token_count", 0) or 0
+        completion = getattr(usage, "candidates_token_count", 0) or 0
+        total = getattr(usage, "total_token_count", 0) or (prompt + completion)
+        return {"prompt": prompt, "completion": completion, "total": total}
     
     def add_document(
         self,
@@ -269,18 +334,6 @@ class RAGEngine:
         # Build context from results
         context = self._build_context(results)
         
-        # Build messages
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        
-        # Add chat history if provided
-        if chat_history:
-            for msg in chat_history[-10:]:  # Last 10 messages for context
-                messages.append({
-                    "role": msg.get("role", "user"),
-                    "content": msg.get("content", "")
-                })
-        
-        # Add current query with context
         user_message = f"""## Retrieved Context
 
 {context}
@@ -291,17 +344,18 @@ class RAGEngine:
 
 Please provide a comprehensive answer based on the context above. Remember to cite specific line numbers from the documents."""
         
-        messages.append({"role": "user", "content": user_message})
+        # OpenAI chat.completions API (commented out)
+        # response = self.client.chat.completions.create(...)
         
-        # Generate response
-        response = self.client.chat.completions.create(
-            model=self.chat_model,
-            messages=messages,
-            temperature=0.3,
-            max_tokens=2000
-        )
+        # Deprecated google.generativeai chat (commented out)
+        # history = self._build_gemini_history(chat_history)
+        # chat = self.model.start_chat(history=history)
+        # response = chat.send_message(user_message)
         
-        answer = response.choices[0].message.content
+        contents = self._build_gemini_contents(user_message, chat_history)
+        response = self._generate(contents)
+        answer = response.text or ""
+        tokens_used = self._usage_tokens(response)
         
         # Create citations
         citations = self._create_citations(results)
@@ -313,7 +367,7 @@ Please provide a comprehensive answer based on the context above. Remember to ci
         log_query(
             query=question,
             response_preview=answer[:100] if answer else "",
-            tokens=response.usage.total_tokens,
+            tokens=tokens_used["total"],
             time_taken=processing_time
         )
         
@@ -322,11 +376,7 @@ Please provide a comprehensive answer based on the context above. Remember to ci
             citations=citations,
             retrieved_chunks=results,
             model_used=self.chat_model,
-            tokens_used={
-                "prompt": response.usage.prompt_tokens,
-                "completion": response.usage.completion_tokens,
-                "total": response.usage.total_tokens
-            },
+            tokens_used=tokens_used,
             processing_time=processing_time,
             query=question
         )
@@ -380,16 +430,6 @@ Please provide a comprehensive answer based on the context above. Remember to ci
         # Build context
         context = self._build_context(results)
         
-        # Build messages
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        
-        if chat_history:
-            for msg in chat_history[-10:]:
-                messages.append({
-                    "role": msg.get("role", "user"),
-                    "content": msg.get("content", "")
-                })
-        
         user_message = f"""## Retrieved Context
 
 {context}
@@ -400,24 +440,20 @@ Please provide a comprehensive answer based on the context above. Remember to ci
 
 Please provide a comprehensive answer based on the context above."""
         
-        messages.append({"role": "user", "content": user_message})
+        # OpenAI / deprecated generativeai streaming (commented out)
+        # stream = self.client.chat.completions.create(..., stream=True)
+        # chat = self.model.start_chat(history=history)
+        # stream = chat.send_message(user_message, stream=True)
         
-        # Stream response
         full_answer = ""
-        
-        stream = self.client.chat.completions.create(
-            model=self.chat_model,
-            messages=messages,
-            temperature=0.3,
-            max_tokens=2000,
-            stream=True
-        )
+        contents = self._build_gemini_contents(user_message, chat_history)
+        stream = self._generate(contents, stream=True)
         
         for chunk in stream:
-            if chunk.choices[0].delta.content:
-                content = chunk.choices[0].delta.content
-                full_answer += content
-                yield content
+            text = getattr(chunk, "text", None)
+            if text:
+                full_answer += text
+                yield text
         
         # Create final response
         citations = self._create_citations(results)
@@ -427,7 +463,7 @@ Please provide a comprehensive answer based on the context above."""
             citations=citations,
             retrieved_chunks=results,
             model_used=self.chat_model,
-            tokens_used={"prompt": 0, "completion": 0, "total": 0},  # Not available in stream
+            tokens_used={"prompt": 0, "completion": 0, "total": 0},
             processing_time=time.time() - start_time,
             query=question
         )
@@ -510,19 +546,23 @@ Please provide a comprehensive answer based on the context above."""
         if not comparisons:
             return "No relevant information found in the specified documents."
         
-        # Generate comparison
-        messages = [
-            {"role": "system", "content": "You are a document analyst. Compare the information from different documents and highlight similarities and differences."},
-            {"role": "user", "content": f"Question: {question}\n\n" + "\n\n".join(comparisons)}
-        ]
+        # OpenAI / deprecated generativeai comparison (commented out)
+        # compare_model = genai.GenerativeModel(...)
+        # response = compare_model.generate_content(prompt)
         
-        response = self.client.chat.completions.create(
-            model=self.chat_model,
-            messages=messages,
-            temperature=0.3
+        prompt = f"Question: {question}\n\n" + "\n\n".join(comparisons)
+        response = self.client.models.generate_content(
+            model=config.CHAT_MODEL or self.chat_model,
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=(
+                    "You are a document analyst. Compare the information from different "
+                    "documents and highlight similarities and differences."
+                ),
+                temperature=0.3,
+            ),
         )
-        
-        return response.choices[0].message.content
+        return response.text or ""
 
 
 class ConversationalRAG:
@@ -656,4 +696,3 @@ if __name__ == "__main__":
     else:
         print("\n⚠️ No documents indexed. Add a document first:")
         print("   python rag_engine.py path/to/document.pdf")
-

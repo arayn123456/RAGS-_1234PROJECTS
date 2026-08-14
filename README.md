@@ -1,69 +1,156 @@
 # Document Q&A - RAG System
 
-A professional RAG (Retrieval-Augmented Generation) system with React frontend and FastAPI backend.
+A Retrieval-Augmented Generation (RAG) app with a **React** frontend and **FastAPI** backend, powered by **Google Gemini** (free models).
 
-## Project Structure
+---
+
+## Architecture Diagram
+
+![RAG Architecture Diagram](images/rag%20architecture%20diagram.png)
+
+### Architecture (Mermaid)
+
+```mermaid
+flowchart TB
+  User["User browser<br/>Enters a query"]
+  FE["React frontend<br/>localhost:3000"]
+  BE["FastAPI backend<br/>localhost:8000"]
+
+  RAG["RAG engine<br/>Retrieves context"]
+  VS["Vector store<br/>ChromaDB + hybrid"]
+  LLM["Gemini chat<br/>gemini-flash-latest"]
+
+  CHAT["Chat DB / history<br/>Conversation log"]
+
+  UP["Upload / documents<br/>File ingestion"]
+  DP["Document processor<br/>PDF, DOCX, TXT"]
+
+  User --> FE
+  FE --> BE
+
+  BE --> RAG
+  BE --> CHAT
+  BE --> UP
+
+  RAG --> VS
+  RAG --> LLM
+
+  UP --> DP
+  DP -.-> VS
+```
+
+### How data flows
+
+| Step | What happens |
+|------|----------------|
+| 1 | User opens React UI (`localhost:3000`) and asks a question or uploads a file |
+| 2 | Frontend calls FastAPI (`localhost:8000`) |
+| 3 | **Upload path:** Document processor extracts text → Gemini embeddings → ChromaDB |
+| 4 | **Query path:** Hybrid search on ChromaDB → RAG engine builds context → Gemini answers |
+| 5 | Chat messages are stored in Chat DB / history |
+
+---
+
+## Complete Project Structure
 
 ```
 RAGs/
-├── backend/                  # Python backend (FastAPI + RAG Engine)
-│   ├── __init__.py
-│   ├── main.py              # FastAPI routes
-│   ├── rag_engine.py        # Core RAG logic
-│   ├── vector_store.py      # ChromaDB vector storage
-│   ├── document_processor.py # PDF/Word/Text processing
-│   ├── chat_history.py      # Conversation management
-│   ├── config.py            # Configuration settings
-│   └── logger.py            # Logging utilities
 │
-├── frontend/                 # React frontend (Vite)
-│   ├── src/
-│   │   ├── App.jsx          # Main React component
-│   │   ├── main.jsx         # Entry point
-│   │   └── styles.css       # ChatGPT-style CSS
-│   ├── index.html
-│   ├── package.json
-│   └── vite.config.js
+├── backend/                          # Python FastAPI + RAG core
+│   ├── __init__.py                   # Package marker
+│   ├── main.py                       # API routes (upload, query, chat)
+│   ├── rag_engine.py                 # RAG orchestration + Gemini chat
+│   ├── vector_store.py               # ChromaDB + Gemini embeddings + hybrid search
+│   ├── document_processor.py         # PDF / DOCX / TXT / MD / CSV parsing
+│   ├── chat_db.py                    # Persistent chat conversations / messages
+│   ├── chat_history.py               # Conversation helpers
+│   ├── config.py                     # Env, models, paths, chunk settings
+│   └── logger.py                     # Logging helpers
 │
-├── data/                     # Data storage
-│   ├── vector_store/        # ChromaDB database
-│   ├── chat_history/        # Chat sessions
-│   └── processed/           # Processed documents
+├── frontend/                         # React (Vite) UI
+│   ├── index.html                    # HTML shell
+│   ├── package.json                  # Frontend dependencies
+│   ├── package-lock.json
+│   ├── vite.config.js                # Vite dev server config
+│   └── src/
+│       ├── App.jsx                   # Main chat + upload UI
+│       ├── main.jsx                  # React entry point
+│       └── styles.css                # ChatGPT-style theme
 │
-├── logs/                     # Application logs
+├── images/
+│   └── rag architecture diagram.png    # Architecture diagram
+│
+├── data/                             # Runtime data (created at run)
+│   ├── vector_store/                # ChromaDB persist (or LOCALAPPDATA on OneDrive)
+│   ├── chat_history/                 # Chat session storage
+│   ├── uploads/                      # Temp uploads
+│   └── processed/                    # Processed line mappings
+│
+├── logs/                             # Application logs
 │   ├── rag_system.log
 │   ├── queries.log
 │   ├── documents.log
 │   └── errors.log
 │
-├── myvenv/                   # Python virtual environment
-├── .env                      # API keys (create from template)
-├── env_template.txt          # Environment template
-├── requirements.txt          # Python dependencies
-└── run_all.py               # Start backend + frontend
+├── images/                           # Docs assets
+│   └── rag architecture diagram.png
+│
+├── Dockerfile                        # Production Docker image
+├── Dockerfile.dev                    # Dev Docker image
+├── docker-compose.yml                # Docker Compose services
+├── docker-entrypoint-dev.sh          # Dev container entrypoint
+├── DOCKER_DEPLOYMENT.md              # Docker deploy guide
+├── .dockerignore
+│
+├── .env                              # GEMINI_API_KEY (do not commit secrets)
+├── env_template.txt                   # Env template
+├── requirements.txt                  # Python dependencies
+├── run_all.py                        # Start backend + frontend together
+└── README.md                         # This file
 ```
+
+### File roles (quick map)
+
+| File | Role in architecture |
+|------|---------------------|
+| `frontend/src/App.jsx` | User browser UI — query, upload, chat |
+| `backend/main.py` | FastAPI backend — routes to RAG / chat / upload |
+| `backend/rag_engine.py` | RAG engine — retrieve context + call Gemini chat |
+| `backend/vector_store.py` | Vector store — ChromaDB + hybrid search + embeddings |
+| `backend/document_processor.py` | Document processor — PDF, DOCX, TXT, etc. |
+| `backend/chat_db.py` | Chat DB / history — conversation log |
+| `backend/config.py` | Models (`gemini-flash-latest`, `gemini-embedding-2`) + paths |
+| `run_all.py` | One-command launcher for FE + BE |
+
+---
 
 ## Quick Start
 
 ### 1. Setup Environment
 
 ```bash
-# Create .env file from template
+cd RAGs
 copy env_template.txt .env
-
-# Edit .env and add your OpenAI API key
 ```
+
+Edit `.env`:
+
+```env
+GEMINI_API_KEY=your-gemini-api-key-here
+CHAT_MODEL=gemini-flash-latest
+```
+
+Get a free key: https://aistudio.google.com/apikey
 
 ### 2. Install Dependencies
 
 ```bash
-# Activate virtual environment
-myvenv\Scripts\activate
+# Optional: use a venv
+python -m venv rags
+rags\Scripts\activate
 
-# Install Python dependencies
 pip install -r requirements.txt
 
-# Install frontend dependencies
 cd frontend
 npm install
 cd ..
@@ -75,38 +162,65 @@ cd ..
 python run_all.py
 ```
 
-This single command starts:
-- Backend server at http://localhost:8000
-- Frontend at http://localhost:3000
-- Opens browser automatically
+This starts:
 
-### 4. Access the App
+- Frontend: http://localhost:3000  
+- Backend: http://localhost:8000  
+- API Docs: http://localhost:8000/docs  
 
-- **Frontend**: http://localhost:3000
-- **Backend API**: http://localhost:8000
-- **API Docs**: http://localhost:8000/docs
+---
 
 ## Features
 
 - ChatGPT-style UI
-- PDF, Word, Text, Markdown support
+- PDF, Word, Text, Markdown, CSV support
 - Line-level citations
 - Hybrid search (semantic + keyword)
-- Chat history
-- Dark sidebar theme
+- Gemini free models for chat + embeddings
+- Chat history / conversations
+- Docker support
+
+---
 
 ## API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/documents` | List all documents |
-| POST | `/api/upload` | Upload a document |
-| DELETE | `/api/documents/{id}` | Delete a document |
-| POST | `/api/query` | Query documents |
+| GET | `/health` | Health check |
+| GET | `/documents` | List indexed documents |
+| POST | `/upload` | Upload a document |
+| DELETE | `/documents/{id}` | Delete a document |
+| POST | `/query` | Ask a question (RAG) |
+| GET | `/chat/conversations` | List conversations |
+| GET | `/chat/messages` | Get messages |
+| POST | `/chat/messages` | Save a message |
+| DELETE | `/chat/messages` | Clear conversation messages |
+| PUT | `/chat/conversations/{id}` | Rename conversation |
+| DELETE | `/clear-all` | Clear all documents + chat data |
+
+---
+
+## Models (Gemini)
+
+| Purpose | Default model |
+|---------|----------------|
+| Chat | `gemini-flash-latest` |
+| Embeddings | `gemini-embedding-2` |
+
+Override in `.env` if needed.
+
+---
 
 ## Configuration
 
-Edit `backend/config.py` to customize settings.
+Edit `backend/config.py` or `.env` for:
+
+- `GEMINI_API_KEY`
+- `CHAT_MODEL` / `EMBEDDING_MODEL`
+- Chunk size / overlap
+- Vector store path
+
+---
 
 ## License
 

@@ -3,14 +3,16 @@ Vector Store Module
 Handles document embeddings and semantic search with ChromaDB.
 """
 import json
+import os
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 import hashlib
 
 import chromadb
-from chromadb.config import Settings
-from openai import OpenAI
+from google import genai as google_genai
+from google.genai import types as genai_types
 from tenacity import retry, stop_after_attempt, wait_exponential
 from tqdm import tqdm
 
@@ -38,18 +40,51 @@ class SearchResult:
         return f"[{self.document_name}, Lines {self.start_line}-{self.end_line}{pages}]"
 
 
+# One Chroma client per persist path (process-wide).
+_chroma_clients: Dict[str, Any] = {}
+
+
+def _get_chroma_client(persist_directory: str):
+    """Create or reuse a PersistentClient, recovering from a corrupt empty store."""
+    if persist_directory in _chroma_clients:
+        return _chroma_clients[persist_directory]
+
+    from chromadb.api.shared_system_client import SharedSystemClient
+
+    persist_path = Path(persist_directory)
+
+    # An empty persist folder makes Chroma's Rust client fail with
+    # "Could not connect to tenant default_tenant".
+    if persist_path.is_dir() and not any(persist_path.iterdir()):
+        persist_path.rmdir()
+
+    try:
+        client = chromadb.PersistentClient(path=str(persist_path))
+    except Exception as exc:
+        log_warning(
+            f"ChromaDB failed to open {persist_path} ({exc}). "
+            "Resetting the persist directory and retrying."
+        )
+        SharedSystemClient.clear_system_cache()
+        shutil.rmtree(persist_path, ignore_errors=True)
+        client = chromadb.PersistentClient(path=str(persist_path))
+
+    _chroma_clients[persist_directory] = client
+    return client
+
+
 class EmbeddingService:
-    """Handles text embedding using OpenAI API."""
+    """Handles text embedding using the free Gemini embedding API."""
     
     def __init__(
         self,
         api_key: Optional[str] = None,
         model: str = config.EMBEDDING_MODEL
     ):
-        self.client = OpenAI(api_key=api_key or config.OPENAI_API_KEY)
+        self.client = google_genai.Client(api_key=api_key or config.GEMINI_API_KEY)
         self.model = model
         self._cache = {}
-        self._cache_file = config.DATA_DIR / "embedding_cache.json"
+        self._cache_file = config.DATA_DIR / "embedding_cache_gemini_768.json"
         self._load_cache()
     
     def _load_cache(self):
@@ -71,30 +106,70 @@ class EmbeddingService:
     
     def _get_cache_key(self, text: str) -> str:
         """Generate cache key for text."""
-        return hashlib.md5(text.encode()).hexdigest()
+        return hashlib.md5(
+            f"{self.model}:{config.EMBEDDING_DIMENSIONS}:{text}".encode()
+        ).hexdigest()
+
+    def _embed_contents(
+        self,
+        texts: List[str],
+        task_type: str = "RETRIEVAL_DOCUMENT",
+    ) -> List[List[float]]:
+        """Return one embedding vector per input text.
+
+        gemini-embedding-2 silently aggregates a list of strings into fewer
+        vectors, which then makes ChromaDB reject the add(). Always embed
+        one text at a time.
+        """
+        embed_config = genai_types.EmbedContentConfig(
+            task_type=task_type,
+            output_dimensionality=config.EMBEDDING_DIMENSIONS,
+        )
+        vectors: List[List[float]] = []
+        for text in texts:
+            item_contents = [
+                genai_types.Content(parts=[genai_types.Part(text=text)])
+            ]
+            try:
+                result = self.client.models.embed_content(
+                    model=self.model,
+                    contents=item_contents,
+                    config=embed_config,
+                )
+            except Exception:
+                result = self.client.models.embed_content(
+                    model=self.model,
+                    contents=item_contents,
+                )
+            if not result.embeddings:
+                raise RuntimeError(f"Gemini returned no embedding for model {self.model}")
+            vectors.append([float(x) for x in result.embeddings[0].values])
+
+        if len(vectors) != len(texts):
+            raise RuntimeError(
+                f"Expected {len(texts)} embeddings from {self.model}, got {len(vectors)}"
+            )
+        return vectors
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    def embed_text(self, text: str) -> List[float]:
+    def embed_text(self, text: str, task_type: str = "RETRIEVAL_QUERY") -> List[float]:
         """Generate embedding for a single text."""
         cache_key = self._get_cache_key(text)
         
         if cache_key in self._cache:
             return self._cache[cache_key]
         
-        response = self.client.embeddings.create(
-            model=self.model,
-            input=text
-        )
-        
-        embedding = response.data[0].embedding
+        embedding = self._embed_contents(
+            [text],
+            task_type=task_type,
+        )[0]
         self._cache[cache_key] = embedding
-        
         return embedding
     
     def embed_texts(
         self,
         texts: List[str],
-        batch_size: int = 2000,  # Increased batch size for speed
+        batch_size: int = 100,
         show_progress: bool = True
     ) -> List[List[float]]:
         """Generate embeddings for multiple texts with batching."""
@@ -117,26 +192,20 @@ class EmbeddingService:
             embeddings.sort(key=lambda x: x[0])
             return [e[1] for e in embeddings]
         
-        # Embed uncached texts in batches
-        log_step(f"Calling OpenAI API for {len(uncached_texts)} embeddings...")
+        log_step(f"Calling Gemini API for {len(uncached_texts)} embeddings ({self.model})...")
         
-        for start in range(0, len(uncached_texts), batch_size):
-            batch = uncached_texts[start:start + batch_size]
-            
-            response = self.client.embeddings.create(
-                model=self.model,
-                input=batch
-            )
-            
-            for j, embedding_data in enumerate(response.data):
-                idx = uncached_indices[start + j]
-                embedding = embedding_data.embedding
-                
-                # Cache the result
-                cache_key = self._get_cache_key(batch[j])
-                self._cache[cache_key] = embedding
-                
-                embeddings.append((idx, embedding))
+        for i, text in enumerate(uncached_texts):
+            try:
+                vector = self._embed_contents(
+                    [text],
+                    task_type="RETRIEVAL_DOCUMENT",
+                )[0]
+            except Exception as exc:
+                log_error(f"Gemini embedding failed ({self.model}): {exc}")
+                raise
+            idx = uncached_indices[i]
+            self._cache[self._get_cache_key(text)] = vector
+            embeddings.append((idx, vector))
         
         # Save cache
         self._save_cache()
@@ -161,11 +230,9 @@ class VectorStore:
         self.collection_name = collection_name
         self.persist_directory = persist_directory or str(config.VECTOR_STORE_PATH)
         
-        # Initialize ChromaDB client with persistence
-        self.client = chromadb.PersistentClient(
-            path=self.persist_directory,
-            settings=Settings(anonymized_telemetry=False)
-        )
+        # Reuse one PersistentClient per path. Creating a second client on a
+        # failed/partial init is what triggers KeyError and RustBindingsAPI errors.
+        self.client = _get_chroma_client(self.persist_directory)
         
         # Get or create collection
         self.collection = self.client.get_or_create_collection(
@@ -228,6 +295,14 @@ class VectorStore:
         # Generate embeddings for all chunks
         texts = [chunk.content for chunk in chunks]
         embeddings = self.embedding_service.embed_texts(texts)
+        embeddings = [[float(x) for x in vec] for vec in embeddings]
+        if len(embeddings) != len(chunks):
+            raise RuntimeError(
+                f"Embedding count mismatch: got {len(embeddings)} vectors for {len(chunks)} chunks"
+            )
+        sizes = {len(vec) for vec in embeddings}
+        if len(sizes) != 1:
+            raise RuntimeError(f"Mixed embedding sizes in one document: {sizes}")
         log_step("Embeddings generated!")
         
         # Prepare data for ChromaDB
@@ -235,27 +310,30 @@ class VectorStore:
         documents = [chunk.content for chunk in chunks]
         metadatas = [
             {
-                "document_id": chunk.document_id,
-                "document_name": chunk.document_name,
-                "start_line": chunk.start_line,
-                "end_line": chunk.end_line,
-                "page_numbers": json.dumps(chunk.page_numbers),
-                "char_start": chunk.char_start,
-                "char_end": chunk.char_end,
-                "chunk_index": chunk.metadata.get("chunk_index", 0),
-                "total_chunks": chunk.metadata.get("total_chunks", len(chunks))
+                "document_id": str(chunk.document_id),
+                "document_name": str(chunk.document_name),
+                "start_line": int(chunk.start_line),
+                "end_line": int(chunk.end_line),
+                "page_numbers": json.dumps(chunk.page_numbers or []),
+                "char_start": int(chunk.char_start),
+                "char_end": int(chunk.char_end),
+                "chunk_index": int(chunk.metadata.get("chunk_index", 0)),
+                "total_chunks": int(chunk.metadata.get("total_chunks", len(chunks))),
             }
             for chunk in chunks
         ]
         
-        # Add to collection
         log_step("Saving to vector database...")
-        self.collection.add(
-            ids=ids,
-            embeddings=embeddings,
-            documents=documents,
-            metadatas=metadatas
-        )
+        try:
+            self.collection.add(
+                ids=ids,
+                embeddings=embeddings,
+                documents=documents,
+                metadatas=metadatas,
+            )
+        except Exception as exc:
+            log_error(f"ChromaDB add failed: {exc}")
+            raise
         
         # Track indexed document
         self._indexed_docs[doc_id] = {
@@ -483,4 +561,3 @@ if __name__ == "__main__":
             print(f"{i}. {result.format_citation()} (Score: {result.score:.3f})")
             print(f"   {result.content[:200]}...")
             print()
-

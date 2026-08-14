@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from . import config
 from .rag_engine import RAGEngine
 from . import chat_db
+from .logger import log_error
 
 # =============================================================================
 # FastAPI App
@@ -61,8 +62,10 @@ engine: Optional[RAGEngine] = None
 def get_engine() -> RAGEngine:
     global engine
     if engine is None:
-        if not config.OPENAI_API_KEY:
-            raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+        # if not config.OPENAI_API_KEY:
+        #     raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+        if not config.GEMINI_API_KEY:
+            raise HTTPException(status_code=500, detail="Gemini API key not configured")
         engine = RAGEngine()
     return engine
 
@@ -141,7 +144,10 @@ async def upload_document(file: UploadFile = File(...)):
                 "chunks": len(doc.chunks)
             }
         }
+    except HTTPException:
+        raise
     except Exception as e:
+        log_error(f"Upload failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/documents/{doc_id}")
@@ -181,7 +187,16 @@ def query_documents(request: QueryRequest):
             citations=citations
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Unwrap tenacity RetryError so the API returns the real Gemini message
+        err = e
+        last = getattr(e, "last_attempt", None)
+        if last is not None:
+            try:
+                err = last.exception() or e
+            except Exception:
+                err = e
+        log_error(f"Query failed: {err}")
+        raise HTTPException(status_code=500, detail=str(err))
 
 @app.delete("/chat")
 def clear_chat():

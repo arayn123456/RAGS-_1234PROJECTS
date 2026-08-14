@@ -1,25 +1,14 @@
 # ============================================
 # RAG Document Assistant - Environment Config
 # ============================================
-# 
-# INSTRUCTIONS:
-# 1. Rename this file to: .env
-# 2. Replace the placeholder with your actual OpenAI API key
-# 3. Save the file
-# 4. Run: python run.py
+# Copy this file to .env and fill in your key:
+#   copy env_template.txt .env
 #
-# ============================================
+# Get a free Gemini API key at: https://aistudio.google.com/apikey
 
-# Required: Your OpenAI API Key
-OPENAI_API_KEY=sk-your-openai-api-key-here
+# OPENAI_API_KEY=sk-your-openai-key-here  # Commented out — using Gemini
+GEMINI_API_KEY=your-gemini-api-key-here
 
-# ============================================
-# Optional: Override default models
-# ============================================
-
-# Embedding model (default: text-embedding-3-small)
-# EMBEDDING_MODEL=text-embedding-3-small
-
-# Chat model (default: gpt-4o-mini, use gpt-4o for complex tasks)
-# CHAT_MODEL=gpt-4o-mini
-
+# Optional Gemini model overrides
+# EMBEDDING_MODEL=gemini-embedding-2
+# CHAT_MODEL=gemini-2.5-flash

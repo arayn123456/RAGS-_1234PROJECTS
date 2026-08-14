@@ -41,7 +41,7 @@ docker pull YOUR_DOCKERHUB_USERNAME/document-qa:latest
 ### Step 2: Run the Container
 ```bash
 docker run -d -p 8089:8000 \
-  -e "OPENAI_API_KEY=sk-proj-YOUR-API-KEY-HERE" \
+  -e "GEMINI_API_KEY=YOUR-GEMINI-API-KEY-HERE" \
   -v /root/data:/app/data \
   --name document-qa \
   YOUR_DOCKERHUB_USERNAME/document-qa:latest
@@ -93,12 +93,12 @@ docker push YOUR_USERNAME/document-qa:latest
 docker stop document-qa && docker rm document-qa
 docker rmi YOUR_USERNAME/document-qa:latest
 docker pull YOUR_USERNAME/document-qa:latest
-docker run -d -p 8089:8000 -e "OPENAI_API_KEY=..." --name document-qa YOUR_USERNAME/document-qa:latest
+docker run -d -p 8089:8000 -e "GEMINI_API_KEY=..." --name document-qa YOUR_USERNAME/document-qa:latest
 ```
 
 ---
 
-### Issue 2: OpenAI API Key Not Working
+### Issue 2: Gemini API Key Not Working
 
 **Symptom**: Document upload fails, logs show API errors
 
@@ -108,13 +108,13 @@ docker run -d -p 8089:8000 -e "OPENAI_API_KEY=..." --name document-qa YOUR_USERN
 ```bash
 # Use quotes around the API key!
 docker run -d -p 8089:8000 \
-  -e "OPENAI_API_KEY=sk-proj-YOUR-FULL-KEY-HERE" \
+  -e "GEMINI_API_KEY=YOUR-FULL-KEY-HERE" \
   ...
 ```
 
 **Verify key is set**:
 ```bash
-docker exec document-qa env | grep OPENAI
+docker exec document-qa env | grep GEMINI
 ```
 
 ---
@@ -143,7 +143,7 @@ docker logs document-qa
 **Solution**: Mount a volume for data persistence:
 ```bash
 docker run -d -p 8089:8000 \
-  -e "OPENAI_API_KEY=..." \
+  -e "GEMINI_API_KEY=..." \
   -v /path/to/data:/app/data \
   --name document-qa \
   YOUR_USERNAME/document-qa:latest
@@ -218,7 +218,7 @@ docker restart document-qa
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OPENAI_API_KEY` | Yes | Your OpenAI API key |
+| `GEMINI_API_KEY` | Yes | Your Google Gemini API key |
 
 ---
 
@@ -247,7 +247,7 @@ sudo usermod -aG docker $USER
 docker pull dpcode72/document-qa:latest
 
 docker run -d -p 80:8000 \
-  -e "OPENAI_API_KEY=sk-proj-YOUR-KEY" \
+  -e "GEMINI_API_KEY=YOUR-GEMINI-KEY" \
   -v ~/document-qa-data:/app/data \
   --name document-qa \
   --restart unless-stopped \
@@ -266,7 +266,7 @@ docker logs document-qa --tail 100
 ```
 
 Common log messages:
-- `OpenAI API key not found` → Set the environment variable
+- `Gemini API key not found` → Set the environment variable
 - `Connection refused` → Check port mapping
 - `Out of memory` → Upgrade instance or add swap
 

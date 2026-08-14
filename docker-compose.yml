@@ -10,7 +10,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # - OPENAI_API_KEY=${OPENAI_API_KEY}  # Commented out — using Gemini for now
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
     volumes:
       # Persist data directories
       - ./data:/app/data
@@ -33,7 +34,8 @@ services:
       - "8000:8000"
       - "3000:3000"
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # - OPENAI_API_KEY=${OPENAI_API_KEY}  # Commented out — using Gemini for now
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
     volumes:
       - ./backend:/app/backend
       - ./frontend:/app/frontend
